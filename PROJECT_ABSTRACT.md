@@ -49,7 +49,7 @@ The 12 target molecules span habitability indicators (H₂O, CO₂), biosignatur
 ## Methodology
 
 ### Model 
-The preferred models would be Random Forest or 1D CNN. We would still want to do source data analysis and EDA to finalize the models being used. We can try to use some baseline model and further some other model as well. This can be confirmed once the project progresses and completes the EDA and feature engineering steps. 
+The preferred models would be Random Forest(Baseline) and further XGBoost or 1D CNN. We would still want to do source data analysis and EDA to finalize the models being used. We can try to use some baseline model and further some other model as well. This can be confirmed once the project progresses and completes the EDA and feature engineering steps. 
 
 
 ### Source data - INARA Dataset
