@@ -15,23 +15,29 @@ Using ML models to perform fast atmospheric retrieval on exoplanet spectra from 
 ```
 inara/
 ├── src/
-│   ├── config.py               ← all constants, paths, hyperparameters
-│   ├── download_inara.py       ← parse CSV files → processed numpy arrays
-│   ├── generate_parameters.py  ← extract labels from spectra
-│   ├── train.py                ← training loops 
-│   ├── evaluate.py             ← test-set metrics, scatter plots, calibration curves
-│   └── predict.py              ← single-spectrum atmospheric retrieval
+│   ├── config.py                       ← all constants, paths, hyperparameters
+│   ├── download_inara.py               ← parse CSV files → processed numpy arrays
+│   ├── generate_parameters.py          ← extract labels from spectra
+│   ├── feature_engineering.py          ← training loops
+│   ├── xgboost_feature_engineering.py  ← training loops 
+│   ├── xgboost_train.py                ← training loops 
+│   ├── xgboost_evaluate.py             ← test-set metrics, scatter plots, calibration curves
+│   └── predict.py                      ← single-spectrum atmospheric retrieval
 ├── notebooks/
-│   └── 01_EDA.ipynb            ← exploratory data analysis
+│   └── 01_EDA.ipynb                    ← exploratory data analysis
 ├── inara_data/
-│   ├── 0001100.csv             ← INARA spectrum files (one per planetary system)
+│   ├── 0001100.csv                     ← INARA spectrum files (one per planetary system)
 │   ├── 0001108.csv
 │   ├── ...
-│   └── processed/              ← 
-│       ├── spectra.npy             (N, 3, 4378) 
-│       ├── molecules.npy           (N, 12)      
-│       ├── aux_params.npy          (N, 8) 
-│       └── wavelengths.npy         (4378,) 
+│   ├── processed/                      ← 
+│   │   ├── spectra.npy                     (N, 3, 4378) 
+│   │   ├── molecules.npy                   (N, 12)      
+│   │   ├── aux_params.npy                  (N, 8) 
+│   │   └── wavelengths.npy                 (4378,)
+│   └── features/  
+│       ├── X.npy  
+│       ├── targets.npy
+
 ├── checkpoints/
 |
 └── results/
