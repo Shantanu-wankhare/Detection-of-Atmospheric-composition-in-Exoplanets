@@ -27,7 +27,7 @@ Molecule order (same as existing model):
 Usage:
   python process_inara.py \\
     --source-dir /Users/bhalchandra/Downloads/full_inara \\
-    --output-dir inara_data/processed_inara \\
+    --output-dir inara_data/processed \\
     --n-samples 10000 \\
     --n-workers 4 \\
     --seed 42
