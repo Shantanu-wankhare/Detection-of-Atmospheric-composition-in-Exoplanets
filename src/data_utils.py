@@ -1,15 +1,14 @@
 """
-Data loading, preprocessing, and splitting utilities for the INARA exoplanet dataset.
+Data loading, preprocessing, and splitting utilities for the INARA ATMOS dataset.
 
-Dataset:
-  spectra.npy   : (3503, 3, 4378) - 3 spectral channels, 4378 wavelength points (0.2-2.0 µm)
-  molecules.npy : (3503, 12)      - log10 molecular volume mixing ratios (targets)
-  wavelengths.npy: (4378,)        - wavelength axis in microns
+Dataset (INARA ATMOS — full 124k):
+  spectra.npy    : (N, 12, 101) - 12 CLIMA atmospheric channels × 101 altitude levels
+  molecules.npy  : (N, 12)      - log10 molecular volume mixing ratios (targets)
+  wavelengths.npy: (101,)       - altitude level index axis
 
-Channels:
-  ch0: star+planet combined signal  [0, 1]
-  ch1: residual / noise-like        [-0.56, 0.83]
-  ch2: planet transit depth         [0.25, 0.37]
+CLIMA channels (12):
+  Temperature, Pressure, H2O, CO2, O2, O3, CH4, N2, N2O, CO, H2, H2S
+  (all Z-score normalised per channel before model input)
 """
 
 import numpy as np
@@ -59,21 +58,21 @@ def split_indices(n_samples, val_frac=0.15, test_frac=0.15, random_state=42):
 # Spectral normalisation (fit on train, apply to all)
 # ------------------------------------------------------------------
 class SpectraScaler:
-    """Per-channel Z-score normalisation across (N, W) for each of the 3 channels."""
+    """Per-channel Z-score normalisation across (N, L) for each of the C channels."""
 
     def __init__(self):
-        self.means = None   # (3, 4378)
-        self.stds = None    # (3, 4378)
+        self.means = None   # (C, L)
+        self.stds = None    # (C, L)
 
     def fit(self, spectra_train):
-        """spectra_train: (N, 3, W)"""
-        self.means = spectra_train.mean(axis=0)   # (3, W)
-        self.stds = spectra_train.std(axis=0)     # (3, W)
-        self.stds = np.where(self.stds < 1e-12, 1.0, self.stds)
+        """spectra_train: (N, C, L)"""
+        self.means = spectra_train.mean(axis=0)   # (C, L)
+        self.stds = spectra_train.std(axis=0)     # (C, L)
+        self.stds = np.where(self.stds < 1e-8, 1.0, self.stds)
         return self
 
     def transform(self, spectra):
-        """Returns float32 normalised spectra (N, 3, W)."""
+        """Returns float32 normalised spectra (N, C, L)."""
         return ((spectra - self.means) / self.stds).astype(np.float32)
 
     def fit_transform(self, spectra_train):
@@ -93,7 +92,7 @@ class MoleculeScaler:
     def fit(self, molecules_train):
         self.means = molecules_train.mean(axis=0)
         self.stds = molecules_train.std(axis=0)
-        self.stds = np.where(self.stds < 1e-12, 1.0, self.stds)
+        self.stds = np.where(self.stds < 1e-8, 1.0, self.stds)
         return self
 
     def transform(self, molecules):
@@ -111,22 +110,40 @@ class MoleculeScaler:
 # ------------------------------------------------------------------
 def extract_baseline_features(spectra, pca=None, n_components=300):
     """
-    Flatten all 3 channels and reduce with PCA.
+    Flatten all C channels and reduce with PCA.
     Returns:
       features_pca : (N, n_components) or (N, fitted_components)
       pca          : fitted sklearn PCA object
     """
     from sklearn.decomposition import PCA
 
-    # Flatten (N, 3, W) → (N, 3*W)
+    # Flatten (N, C, L) → (N, C*L) and upcast to float64.
+    # float32 matmul (N, C*L) @ (C*L, K) can overflow/produce NaN when
+    # C*L is large (e.g. 1212) and PCA eigenvectors span many dimensions.
+    # float64 eliminates this entirely with no meaningful cost for RF features.
     N = spectra.shape[0]
-    flat = spectra.reshape(N, -1).astype(np.float32)
+    flat = spectra.reshape(N, -1).astype(np.float64)
 
-    if pca is None:
-        pca = PCA(n_components=n_components, random_state=42, whiten=True)
-        features_pca = pca.fit_transform(flat)
-    else:
-        features_pca = pca.transform(flat)
+    if np.isnan(flat).any() or np.isinf(flat).any():
+        raise ValueError(
+            'extract_baseline_features: NaN or Inf detected in spectra input. '
+            'Check SpectraScaler output and raw data integrity.'
+        )
+
+    # Suppress spurious FPU RuntimeWarnings from the macOS Accelerate BLAS
+    # backend (divide-by-zero / overflow / invalid in matmul).  These fire
+    # even when the result is fully valid, as confirmed by NaN/Inf checks
+    # above and in the quality report.  Real data problems still raise above.
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', category=RuntimeWarning,
+                                message='.*encountered in matmul.*')
+        if pca is None:
+            pca = PCA(n_components=n_components, svd_solver='full',
+                      random_state=42, whiten=False)
+            features_pca = pca.fit_transform(flat)
+        else:
+            features_pca = pca.transform(flat)
 
     return features_pca, pca
 

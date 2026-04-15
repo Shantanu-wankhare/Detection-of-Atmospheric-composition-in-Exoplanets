@@ -1,27 +1,22 @@
 """
-Deep Learning model: 1D ResNet backbone + per-molecule output heads.
+Deep Learning model: simple 1D CNN backbone + per-molecule output heads.
 
-Architecture:
-  Input  : (B, 3, 4378)  — 3 spectral channels × 4378 wavelength points
-  Stem   : Conv1d(3→64, k=11, s=4) + BN + ReLU  → (B, 64, 1095)
-  Stage 1: 2 × ResBlock(64→64,  stride=1)        → (B,  64, 1095)
-  Stage 2: 2 × ResBlock(64→128, stride=2)        → (B, 128,  548)
-  Stage 3: 2 × ResBlock(128→256, stride=2)       → (B, 256,  274)
-  Stage 4: 2 × ResBlock(256→512, stride=2)       → (B, 512,  137)
-  Pool   : AdaptiveAvgPool1d(1) + Flatten         → (B, 512)
-  Shared : Dropout(0.3) + FC(512→256) + ReLU
+Architecture (INARA ATMOS — 12 CLIMA channels × 101 altitude levels):
+  Input  : (B, 12, 101) — 12 CLIMA channels × 101 altitude levels
+  Block 1: Conv1d(12→32,  k=9, s=2, p=4) + BN + ReLU + MaxPool1d(2) → (B, 32, 25)
+  Block 2: Conv1d(32→64,  k=7, s=2, p=3) + BN + ReLU + MaxPool1d(2) → (B, 64,  6)
+  Block 3: Conv1d(64→128, k=5, s=2, p=2) + BN + ReLU + MaxPool1d(2) → (B, 128, 1)
+  Block 4: Conv1d(128→256,k=3, s=1, p=1) + BN + ReLU                → (B, 256, 1)
+  Pool   : AdaptiveAvgPool1d(1) + Flatten                            → (B, 256)
+  Shared : Dropout(0.25) + FC(256→128) + LayerNorm + ReLU           → (B, 128)
   Heads  : 12 × molecule-specific MLP → scalar log10 abundance
 
-Per-molecule head configs are tuned to each molecule's:
-  - Prediction difficulty (depth of head)
-  - Risk of overfitting (dropout rate)
+Per-molecule head configs stay lightweight so the model remains simple.
 """
 
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
-from pathlib import Path
 
 from .data_utils import MOLECULE_NAMES
 
@@ -29,23 +24,21 @@ from .data_utils import MOLECULE_NAMES
 # ------------------------------------------------------------------
 # Per-molecule head configurations
 # ------------------------------------------------------------------
-# Tuning rationale:
-#   hidden_dims  : larger/deeper for hard-to-predict trace molecules (SO2, NH3, H2S)
-#   dropout      : higher for molecules prone to overfitting (trace, low variance)
+# Keep the heads compact so the network stays easy to train and interpret.
 
 MOLECULE_HEAD_CONFIGS = {
-    'H2O': {'hidden_dims': [256, 128], 'dropout': 0.30},
-    'CO2': {'hidden_dims': [128, 64],  'dropout': 0.20},
-    'O2':  {'hidden_dims': [128, 64],  'dropout': 0.20},
-    'O3':  {'hidden_dims': [256, 128], 'dropout': 0.30},
-    'CH4': {'hidden_dims': [256, 128], 'dropout': 0.30},
-    'N2':  {'hidden_dims': [128, 64],  'dropout': 0.20},
-    'N2O': {'hidden_dims': [256, 128], 'dropout': 0.35},
-    'CO':  {'hidden_dims': [256, 128], 'dropout': 0.30},
-    'H2':  {'hidden_dims': [256, 128], 'dropout': 0.30},
-    'H2S': {'hidden_dims': [256, 128, 64], 'dropout': 0.35},
-    'SO2': {'hidden_dims': [256, 128, 64], 'dropout': 0.40},
-    'NH3': {'hidden_dims': [256, 128, 64], 'dropout': 0.40},
+    'H2O': {'hidden_dims': [128], 'dropout': 0.20},
+    'CO2': {'hidden_dims': [64],   'dropout': 0.15},
+    'O2':  {'hidden_dims': [64],   'dropout': 0.15},
+    'O3':  {'hidden_dims': [128],  'dropout': 0.20},
+    'CH4': {'hidden_dims': [128],  'dropout': 0.20},
+    'N2':  {'hidden_dims': [64],   'dropout': 0.15},
+    'N2O': {'hidden_dims': [128],  'dropout': 0.20},
+    'CO':  {'hidden_dims': [128],  'dropout': 0.20},
+    'H2':  {'hidden_dims': [128],  'dropout': 0.20},
+    'H2S': {'hidden_dims': [128],  'dropout': 0.25},
+    'SO2': {'hidden_dims': [128],  'dropout': 0.25},
+    'NH3': {'hidden_dims': [128],  'dropout': 0.25},
 }
 
 # Per-molecule loss weights (inverse of log10-space variance across dataset)
@@ -61,31 +54,6 @@ MOLECULE_LOSS_WEIGHTS = {
 # ------------------------------------------------------------------
 # Building blocks
 # ------------------------------------------------------------------
-class ResBlock1D(nn.Module):
-    """1D residual block with optional downsampling."""
-
-    def __init__(self, in_ch, out_ch, stride=1, kernel_size=3):
-        super().__init__()
-        pad = kernel_size // 2
-        self.conv1 = nn.Conv1d(in_ch, out_ch, kernel_size, stride, pad, bias=False)
-        self.bn1   = nn.BatchNorm1d(out_ch)
-        self.conv2 = nn.Conv1d(out_ch, out_ch, kernel_size, 1, pad, bias=False)
-        self.bn2   = nn.BatchNorm1d(out_ch)
-
-        self.shortcut = nn.Identity()
-        if stride != 1 or in_ch != out_ch:
-            self.shortcut = nn.Sequential(
-                nn.Conv1d(in_ch, out_ch, 1, stride, bias=False),
-                nn.BatchNorm1d(out_ch),
-            )
-
-    def forward(self, x):
-        out = F.relu(self.bn1(self.conv1(x)), inplace=True)
-        out = self.bn2(self.conv2(out))
-        out = F.relu(out + self.shortcut(x), inplace=True)
-        return out
-
-
 class MoleculeHead(nn.Module):
     """Per-molecule output head with configurable depth and dropout."""
 
@@ -107,12 +75,12 @@ class MoleculeHead(nn.Module):
 # ------------------------------------------------------------------
 # Full model
 # ------------------------------------------------------------------
-class SpectralResNet(nn.Module):
+class CNN1D(nn.Module):
     """
-    1D ResNet backbone with 12 per-molecule output heads.
+    Simple 1D CNN backbone with 12 per-molecule output heads.
 
     Input : (B, in_channels, seq_len)  normalised spectra / atmospheric profile
-    Output: (B, 12)                     predicted log10 molecular abundances
+    Output: (B, 12)                    predicted log10 molecular abundances
 
     in_channels=3   for PSG spectra (3 signal channels, 4378 wavelength pts)
     in_channels=12  for INARA ATMOS (12 CLIMA variables, 101 altitude levels)
@@ -123,67 +91,56 @@ class SpectralResNet(nn.Module):
         head_configs = head_configs or MOLECULE_HEAD_CONFIGS
         self.in_channels = in_channels
 
-        # Stem: stride=4 for long PSG sequences; stride=1 for short INARA seqs
-        stem_stride = 4 if in_channels == 3 else 1
-        self.stem = nn.Sequential(
-            nn.Conv1d(in_channels, 64, kernel_size=11, stride=stem_stride,
-                      padding=5, bias=False),
+        self.backbone = nn.Sequential(
+            nn.Conv1d(in_channels, 32, kernel_size=9, stride=2, padding=4, bias=False),
+            nn.BatchNorm1d(32),
+            nn.ReLU(inplace=True),
+            nn.MaxPool1d(kernel_size=2, stride=2),
+
+            nn.Conv1d(32, 64, kernel_size=7, stride=2, padding=3, bias=False),
             nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
-        )  # → (B, 64, seq_len//stem_stride)
+            nn.MaxPool1d(kernel_size=2, stride=2),
 
-        # Residual stages
-        self.stage1 = nn.Sequential(
-            ResBlock1D(64,  64,  stride=1),
-            ResBlock1D(64,  64,  stride=1),
-        )  # → (B, 64, 1095)
+            nn.Conv1d(64, 128, kernel_size=5, stride=2, padding=2, bias=False),
+            nn.BatchNorm1d(128),
+            nn.ReLU(inplace=True),
+            nn.MaxPool1d(kernel_size=2, stride=2),
 
-        self.stage2 = nn.Sequential(
-            ResBlock1D(64,  128, stride=2),
-            ResBlock1D(128, 128, stride=1),
-        )  # → (B, 128, 548)
-
-        self.stage3 = nn.Sequential(
-            ResBlock1D(128, 256, stride=2),
-            ResBlock1D(256, 256, stride=1),
-        )  # → (B, 256, 274)
-
-        self.stage4 = nn.Sequential(
-            ResBlock1D(256, 512, stride=2),
-            ResBlock1D(512, 512, stride=1),
-        )  # → (B, 512, 137)
-
-        # Global pooling
-        self.pool = nn.AdaptiveAvgPool1d(1)  # → (B, 512, 1)
-
-        # Shared projection
-        self.shared = nn.Sequential(
-            nn.Dropout(0.30),
-            nn.Linear(512, 256),
-            nn.LayerNorm(256),
+            nn.Conv1d(128, 256, kernel_size=3, stride=1, padding=1, bias=False),
+            nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
         )
 
-        # Per-molecule heads
+        self.pool = nn.AdaptiveAvgPool1d(1)  # → (B, 256, 1)
+
+        self.shared = nn.Sequential(
+            nn.Dropout(0.25),
+            nn.Linear(256, 128),
+            nn.LayerNorm(128),
+            nn.ReLU(inplace=True),
+        )
+
         self.heads = nn.ModuleDict({
-            mol: MoleculeHead(256, cfg['hidden_dims'], cfg['dropout'])
+            mol: MoleculeHead(128, cfg['hidden_dims'], cfg['dropout'])
             for mol, cfg in head_configs.items()
         })
 
     def forward(self, x):
-        """x: (B, 3, 4378) → out: (B, 12)"""
-        x = self.stem(x)
-        x = self.stage1(x)
-        x = self.stage2(x)
-        x = self.stage3(x)
-        x = self.stage4(x)
-        x = self.pool(x).squeeze(-1)   # (B, 512)
-        x = self.shared(x)             # (B, 256)
+        """x: (B, in_channels, seq_len) → out: (B, 12)"""
+        x = self.backbone(x)
+        x = self.pool(x).squeeze(-1)   # (B, 256)
+        x = self.shared(x)             # (B, 128)
         out = torch.stack([self.heads[mol](x) for mol in MOLECULE_NAMES], dim=1)
         return out   # (B, 12)
 
     def count_parameters(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+# Legacy aliases kept for any saved checkpoints or old configs.
+SpectralCNN    = CNN1D
+SpectralResNet = CNN1D
 
 
 # ------------------------------------------------------------------
@@ -281,8 +238,8 @@ class Trainer:
 # ------------------------------------------------------------------
 class SpectralDataset(torch.utils.data.Dataset):
     def __init__(self, spectra, molecules, augment=False, noise_std=0.01):
-        self.spectra   = torch.from_numpy(spectra)     # (N, 3, W) float32
-        self.molecules = torch.from_numpy(molecules)   # (N, 12)    float32
+        self.spectra   = torch.from_numpy(spectra)     # (N, C, L) float32
+        self.molecules = torch.from_numpy(molecules)   # (N, 12)   float32
         self.augment   = augment
         self.noise_std = noise_std
 

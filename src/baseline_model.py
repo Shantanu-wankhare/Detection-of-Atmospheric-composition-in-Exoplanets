@@ -1,16 +1,15 @@
 """
 Baseline model: per-molecule Random Forest with PCA-reduced spectral features.
 
-Each of the 12 molecules gets its own RF with tuned hyperparameters reflecting:
-- Dynamic range of the molecule (wide-range molecules need deeper trees)
-- Typical abundance level (trace molecules need more estimators)
-- Spectral distinctiveness (molecules with unique absorption bands are easier to predict)
+Each of the 12 molecules gets its own RF with intentionally modest hyperparameters
+so the method stays a true baseline rather than a high-capacity model.
 """
 
-import numpy as np
-import joblib
 import os
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+
+import joblib
+import numpy as np
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score
 
 from .data_utils import MOLECULE_NAMES, compute_metrics, print_metrics
@@ -19,37 +18,21 @@ from .data_utils import MOLECULE_NAMES, compute_metrics, print_metrics
 # ------------------------------------------------------------------
 # Per-molecule RF hyperparameters
 # ------------------------------------------------------------------
-# Tuning rationale:
-#   n_estimators : more for trace/variable molecules (SO2, NH3, H2O, CH4)
-#   max_depth    : deeper for wide-range molecules; shallower for near-constant ones
-#   min_samples_leaf: larger for less-variable molecules to avoid overfitting
-#   max_features : 'sqrt' for high-variance targets; smaller for stable molecules
+# Baseline policy:
+#   - keep n_estimators <= 100
+#   - keep max_depth shallow
+#   - use a small min_samples_leaf to reduce overfitting
 
 MOLECULE_RF_PARAMS = {
-    'H2O': {'n_estimators': 300, 'max_depth': 20, 'min_samples_leaf': 1,
-            'max_features': 'sqrt', 'n_jobs': -1, 'random_state': 42},
-    'CO2': {'n_estimators': 200, 'max_depth': 12, 'min_samples_leaf': 2,
-            'max_features': 0.5,   'n_jobs': -1, 'random_state': 42},
-    'O2':  {'n_estimators': 200, 'max_depth': 12, 'min_samples_leaf': 2,
-            'max_features': 0.5,   'n_jobs': -1, 'random_state': 42},
-    'O3':  {'n_estimators': 300, 'max_depth': 18, 'min_samples_leaf': 1,
-            'max_features': 'sqrt', 'n_jobs': -1, 'random_state': 42},
-    'CH4': {'n_estimators': 300, 'max_depth': 20, 'min_samples_leaf': 1,
-            'max_features': 'sqrt', 'n_jobs': -1, 'random_state': 42},
-    'N2':  {'n_estimators': 150, 'max_depth': 10, 'min_samples_leaf': 3,
-            'max_features': 0.4,   'n_jobs': -1, 'random_state': 42},
-    'N2O': {'n_estimators': 300, 'max_depth': 18, 'min_samples_leaf': 1,
-            'max_features': 'sqrt', 'n_jobs': -1, 'random_state': 42},
-    'CO':  {'n_estimators': 300, 'max_depth': 18, 'min_samples_leaf': 1,
-            'max_features': 'sqrt', 'n_jobs': -1, 'random_state': 42},
-    'H2':  {'n_estimators': 300, 'max_depth': 16, 'min_samples_leaf': 1,
-            'max_features': 'sqrt', 'n_jobs': -1, 'random_state': 42},
-    'H2S': {'n_estimators': 400, 'max_depth': 20, 'min_samples_leaf': 1,
-            'max_features': 'sqrt', 'n_jobs': -1, 'random_state': 42},
-    'SO2': {'n_estimators': 400, 'max_depth': 22, 'min_samples_leaf': 1,
-            'max_features': 'sqrt', 'n_jobs': -1, 'random_state': 42},
-    'NH3': {'n_estimators': 400, 'max_depth': 22, 'min_samples_leaf': 1,
-            'max_features': 'sqrt', 'n_jobs': -1, 'random_state': 42},
+    mol: {
+        'n_estimators': 100,
+        'max_depth': 8,
+        'min_samples_leaf': 2,
+        'max_features': 'sqrt',
+        'n_jobs': -1,
+        'random_state': 42,
+    }
+    for mol in MOLECULE_NAMES
 }
 
 
