@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Train and evaluate the deep learning (1D ResNet) model on the INARA exoplanet dataset.
+Train and evaluate the deep learning (1D CNN) model on the INARA exoplanet dataset.
 
 Usage:
     python run_deep_model.py [--epochs 150] [--batch-size 32] [--lr 1e-3] [--save]
@@ -27,13 +27,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.data_utils import prepare_data, MOLECULE_NAMES, compute_metrics, print_metrics
 from src.deep_model import (
-    SpectralResNet, SpectralDataset, Trainer, get_device, MOLECULE_HEAD_CONFIGS
+    CNN1D, SpectralDataset, Trainer, get_device, MOLECULE_HEAD_CONFIGS
 )
 
 
 def main(epochs=150, batch_size=32, lr=1e-3, weight_decay=1e-4,
          patience=30, save_model=False, resume=None,
-         data_dir=None, in_channels=3):
+         data_dir=None, in_channels=12):
 
     out_tag = Path(data_dir).name if data_dir else 'default'
     results_dir = Path('results') / out_tag
@@ -58,13 +58,13 @@ def main(epochs=150, batch_size=32, lr=1e-3, weight_decay=1e-4,
     print('Loading and preparing data ...')
     t0 = time.time()
     data = prepare_data(val_frac=0.15, test_frac=0.15,
-                        random_state=42, pca_components=50,  # pca_components unused here
+                        random_state=42,
                         data_dir=data_dir)
     print(f'  Train: {len(data["idx_train"])}  Val: {len(data["idx_val"])}  '
           f'Test: {len(data["idx_test"])}')
     print(f'  Data loaded in {time.time()-t0:.1f}s')
 
-    spec_train = data['spectra_train']    # (N, 3, 4378)
+    spec_train = data['spectra_train']    # (N, 12, 101) for INARA ATMOS
     spec_val   = data['spectra_val']
     spec_test  = data['spectra_test']
     mol_train  = data['molecules_train']  # (N, 12) log10
@@ -88,7 +88,7 @@ def main(epochs=150, batch_size=32, lr=1e-3, weight_decay=1e-4,
     # ------------------------------------------------------------------
     # 3. Model
     # ------------------------------------------------------------------
-    model = SpectralResNet(head_configs=MOLECULE_HEAD_CONFIGS, in_channels=in_channels)
+    model = CNN1D(head_configs=MOLECULE_HEAD_CONFIGS, in_channels=in_channels)
     print(f'\nModel parameters: {model.count_parameters():,}')
 
     if resume is not None:
@@ -146,8 +146,8 @@ def main(epochs=150, batch_size=32, lr=1e-3, weight_decay=1e-4,
     val_df  = compute_metrics(mol_val,  val_pred)
     test_df = compute_metrics(mol_test, test_pred)
 
-    print_metrics(val_df,  title='SpectralResNet — Validation Metrics')
-    print_metrics(test_df, title='SpectralResNet — Test Metrics')
+    print_metrics(val_df,  title='1D CNN — Validation Metrics')
+    print_metrics(test_df, title='1D CNN — Test Metrics')
 
     # ------------------------------------------------------------------
     # 6. Save results
@@ -198,7 +198,7 @@ def main(epochs=150, batch_size=32, lr=1e-3, weight_decay=1e-4,
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Train SpectralResNet deep model')
+    parser = argparse.ArgumentParser(description='Train 1D CNN deep model')
     parser.add_argument('--epochs',       type=int,   default=150,  help='Max epochs (default: 150)')
     parser.add_argument('--batch-size',   type=int,   default=32,   help='Batch size (default: 32)')
     parser.add_argument('--lr',           type=float, default=1e-3, help='Learning rate (default: 1e-3)')
@@ -209,8 +209,8 @@ if __name__ == '__main__':
     parser.add_argument('--data-dir',     type=str,   default=None,
                         help='Path to processed data directory '
                              '(default: inara_data/processed)')
-    parser.add_argument('--in-channels',  type=int,   default=3,
-                        help='Spectral input channels: 3 for PSG, 12 for INARA ATMOS')
+    parser.add_argument('--in-channels',  type=int,   default=12,
+                        help='Input channels: 12 for INARA ATMOS (default), 3 for PSG spectra')
     args = parser.parse_args()
     main(
         epochs=args.epochs,
